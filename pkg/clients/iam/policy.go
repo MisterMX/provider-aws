@@ -49,7 +49,13 @@ func IsPolicyUpToDate(in v1beta1.PolicyParameters, policy iamtypes.PolicyVersion
 		return false, "", nil
 	}
 
-	unescapedPolicy, err := url.QueryUnescape(aws.ToString(policy.Document))
+	return IsPolicyDocumentUpToDate(in.Document, policy.Document)
+}
+
+// IsPolicyDocumentUpToDate checks whether there is a change in any of the modifiable fields in policy.
+func IsPolicyDocumentUpToDate(in string, policy *string) (bool, string, error) {
+
+	unescapedPolicy, err := url.QueryUnescape(aws.ToString(policy))
 	if err != nil {
 		return false, "", err
 	}
@@ -57,7 +63,7 @@ func IsPolicyUpToDate(in v1beta1.PolicyParameters, policy iamtypes.PolicyVersion
 	if err != nil {
 		return false, "", err
 	}
-	specPolicy, err := policyutils.ParsePolicyString(in.Document)
+	specPolicy, err := policyutils.ParsePolicyString(in)
 	if err != nil {
 		return false, "", err
 	}
