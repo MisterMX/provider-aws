@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
 	"github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
@@ -70,4 +71,10 @@ func IsPolicyDocumentUpToDate(in string, policy *string) (bool, string, error) {
 
 	areEqual, diff := policyutils.ArePoliciesEqal(&specPolicy, &externpolicy)
 	return areEqual, diff, nil
+}
+
+// ValidatePolicyObject tries to parse the raw policy into a Policy object.
+func ValidatePolicyObject(policy extv1.JSON) error {
+	_, err := policyutils.ParsePolicyBytes(policy.Raw)
+	return err
 }

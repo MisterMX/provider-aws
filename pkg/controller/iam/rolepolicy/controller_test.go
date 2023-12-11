@@ -29,6 +29,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/test"
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/errors"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
@@ -40,7 +41,7 @@ import (
 var (
 	unexpectedItem resource.Managed
 	arn            = "arn:aws:iam::aws:policy/aws-service-role/AccessAnalyzerServiceRolePolicy"
-	document       = `{
+	documentRaw    = `{
 		"Version": "2012-10-17",
 		"Statement": [
 		  {
@@ -51,11 +52,18 @@ var (
 		  }
 		]
 	  }`
+	document   = makeDocument(documentRaw)
 	roleName   = "my-role"
 	policyName = "my-policy"
 
 	errBoom = errors.New("boom")
 )
+
+func makeDocument(raw string) extv1.JSON {
+	return extv1.JSON{
+		Raw: []byte(raw),
+	}
+}
 
 type args struct {
 	kube client.Client
@@ -106,7 +114,7 @@ func TestObserve(t *testing.T) {
 						return &awsiam.GetRolePolicyOutput{
 							PolicyName:     aws.String(policyName),
 							RoleName:       aws.String(roleName),
-							PolicyDocument: &document,
+							PolicyDocument: &documentRaw,
 						}, nil
 					},
 				},
@@ -148,25 +156,6 @@ func TestObserve(t *testing.T) {
 			want: want{
 				cr:  rolePolicy(withExternalName(arn)),
 				err: errorutils.Wrap(errBoom, errGet),
-			},
-		},
-		"EmptySpecRolePolicy": {
-			args: args{
-				iam: &fake.MockRolePolicyClient{
-					MockGetRolePolicy: func(ctx context.Context, input *awsiam.GetRolePolicyInput, opts []func(*awsiam.Options)) (*awsiam.GetRolePolicyOutput, error) {
-						return &awsiam.GetRolePolicyOutput{
-							PolicyName: aws.String(policyName),
-						}, nil
-					},
-				},
-				cr: rolePolicy(withExternalName(arn)),
-			},
-			want: want{
-				cr: rolePolicy(withExternalName(arn),
-					withConditions(xpv1.Available())),
-				result: managed.ExternalObservation{
-					ResourceExists: true,
-				},
 			},
 		},
 	}
@@ -243,11 +232,21 @@ func TestCreate(t *testing.T) {
 						return nil, errBoom
 					},
 				},
-				cr: rolePolicy(),
+				cr: rolePolicy(
+					withSpec(v1beta1.RolePolicyParameters{
+						Document: document,
+						RoleName: roleName,
+					}),
+				),
 			},
 			want: want{
-				cr:  rolePolicy(),
-				err: errBoom,
+				cr: rolePolicy(
+					withSpec(v1beta1.RolePolicyParameters{
+						Document: document,
+						RoleName: roleName,
+					}),
+				),
+				err: errors.Wrap(errBoom, errPutRolePolicy),
 			},
 		},
 	}
@@ -289,10 +288,22 @@ func TestUpdate(t *testing.T) {
 						return &awsiam.PutRolePolicyOutput{}, nil
 					},
 				},
-				cr: rolePolicy(withExternalName(arn)),
+				cr: rolePolicy(
+					withExternalName(arn),
+					withSpec(v1beta1.RolePolicyParameters{
+						Document: document,
+						RoleName: roleName,
+					}),
+				),
 			},
 			want: want{
-				cr: rolePolicy(withExternalName(arn)),
+				cr: rolePolicy(
+					withExternalName(arn),
+					withSpec(v1beta1.RolePolicyParameters{
+						Document: document,
+						RoleName: roleName,
+					}),
+				),
 			},
 		},
 		"InValidInput": {
@@ -407,7 +418,7 @@ func TestDelete(t *testing.T) {
 
 func TestIsInlinePolicyUpToDate(t *testing.T) {
 	type args struct {
-		cr       string
+		cr       extv1.JSON
 		external *string
 	}
 
@@ -417,7 +428,7 @@ func TestIsInlinePolicyUpToDate(t *testing.T) {
 	}{
 		"SameFields": {
 			args: args{
-				cr: `{
+				cr: makeDocument(`{
 		"Version": "2012-10-17",
 		"Statement": [
 		  {
@@ -428,7 +439,7 @@ func TestIsInlinePolicyUpToDate(t *testing.T) {
 			"Action": "sts:AssumeRole"
 		  }
 		]
-	   }`,
+	   }`),
 				external: aws.String(`{
 		"Version": "2012-10-17",
 		"Statement": [
@@ -446,7 +457,7 @@ func TestIsInlinePolicyUpToDate(t *testing.T) {
 		},
 		"SameFieldsEscaped": {
 			args: args{
-				cr: `{
+				cr: makeDocument(`{
 		"Version": "2012-10-17",
 		"Statement": [
 		  {
@@ -457,14 +468,14 @@ func TestIsInlinePolicyUpToDate(t *testing.T) {
 			"Action": "sts:AssumeRole"
 		  }
 		]
-	   }`,
+	   }`),
 				external: aws.String(`%7B%22Version%22%3A%222012-10-17%22%2C%22Statement%22%3A%5B%7B%22Effect%22%3A%22Allow%22%2C%22Principal%22%3A%7B%22Service%22%3A%22eks.amazonaws.com%22%7D%2C%22Action%22%3A%22sts%3AAssumeRole%22%7D%5D%7D`),
 			},
 			want: true,
 		},
 		"DifferentFields": {
 			args: args{
-				cr: `{
+				cr: makeDocument(`{
 		"Version": "2012-10-17",
 		"Statement": [
 		  {
@@ -475,7 +486,7 @@ func TestIsInlinePolicyUpToDate(t *testing.T) {
 			"Action": "sts:*"
 		  }
 		]
-	   }`,
+	   }`),
 				external: aws.String(`{
 		"Version": "2012-10-17",
 		"Statement": [
@@ -493,7 +504,7 @@ func TestIsInlinePolicyUpToDate(t *testing.T) {
 		},
 		"SameActionArray": {
 			args: args{
-				cr: `{
+				cr: makeDocument(`{
 		"Version": "2012-10-17",
 		"Statement": [
 		  {
@@ -504,7 +515,7 @@ func TestIsInlinePolicyUpToDate(t *testing.T) {
 			"Action": ["sts:AssumeRole"]
 		  }
 		]
-	   }`,
+	   }`),
 				external: aws.String(`{
 		"Version": "2012-10-17",
 		"Statement": [
@@ -522,7 +533,7 @@ func TestIsInlinePolicyUpToDate(t *testing.T) {
 		},
 		"DifferentActionArray": {
 			args: args{
-				cr: `{
+				cr: makeDocument(`{
 		"Version": "2012-10-17",
 		"Statement": [
 		  {
@@ -533,7 +544,7 @@ func TestIsInlinePolicyUpToDate(t *testing.T) {
 			"Action": ["sts:AssumeRole", "sts:GetFederationToken"]
 		  }
 		]
-	   }`,
+	   }`),
 				external: aws.String(`{
 		"Version": "2012-10-17",
 		"Statement": [

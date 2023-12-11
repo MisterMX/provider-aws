@@ -6,7 +6,7 @@ metadata:
 spec:
   forProvider:
     roleName: somerole
-    document: |
+    document:
       {
         "Version": "2012-10-17",
         "Statement": [

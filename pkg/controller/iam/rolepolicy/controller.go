@@ -30,6 +30,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/pkg/errors"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -43,8 +44,10 @@ import (
 )
 
 const (
-	errUnexpectedObject = "The managed resource is not an RolePolicy resource"
-	errGet              = "failed to get RolePolicy for role with name"
+	errUnexpectedObject      = "The managed resource is not an RolePolicy resource"
+	errGet                   = "failed to get RolePolicy for role with name"
+	errPutRolePolicy         = "cannot put role policy"
+	errInvalidPolicyDocument = "invalid policy document"
 )
 
 // SetupRolePolicy adds a controller that reconciles RolePolicy.
@@ -142,14 +145,7 @@ func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.Ex
 	if !ok {
 		return managed.ExternalCreation{}, errors.New(errUnexpectedObject)
 	}
-
-	_, err := e.client.PutRolePolicy(ctx, &awsiam.PutRolePolicyInput{
-		PolicyName:     aws.String(meta.GetExternalName(cr)),
-		RoleName:       aws.String(cr.Spec.ForProvider.RoleName),
-		PolicyDocument: aws.String(cr.Spec.ForProvider.Document),
-	})
-
-	return managed.ExternalCreation{}, err
+	return managed.ExternalCreation{}, e.putRolePolicy(ctx, cr)
 }
 
 func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.ExternalUpdate, error) {
@@ -157,12 +153,19 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 	if !ok {
 		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
 	}
+	return managed.ExternalUpdate{}, e.putRolePolicy(ctx, cr)
+}
+
+func (e *external) putRolePolicy(ctx context.Context, cr *v1beta1.RolePolicy) error {
+	if err := iam.ValidatePolicyObject(cr.Spec.ForProvider.Document); err != nil {
+		return errors.Wrap(err, errInvalidPolicyDocument)
+	}
 	_, err := e.client.PutRolePolicy(ctx, &awsiam.PutRolePolicyInput{
 		PolicyName:     aws.String(meta.GetExternalName(cr)),
 		RoleName:       aws.String(cr.Spec.ForProvider.RoleName),
-		PolicyDocument: aws.String(cr.Spec.ForProvider.Document),
+		PolicyDocument: aws.String(string(cr.Spec.ForProvider.Document.Raw)),
 	})
-	return managed.ExternalUpdate{}, err
+	return errors.Wrap(err, errPutRolePolicy)
 }
 
 func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
@@ -178,12 +181,7 @@ func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
 		RoleName:   aws.String(cr.Spec.ForProvider.RoleName),
 	})
 
-	if IsRolePolicyNotFoundErr(err) {
-		cr.Status.SetConditions()
-		return nil
-	}
-
-	return err
+	return resource.Ignore(IsRolePolicyNotFoundErr, err)
 }
 
 // IsRolePolicyNotFoundErr returns true if the aws exception indicates the role policy was not found
@@ -193,17 +191,12 @@ func IsRolePolicyNotFoundErr(err error) bool {
 }
 
 // IsInlinePolicyUpToDate checks whether there is a change in any of the modifiable fields in policy.
-func IsInlinePolicyUpToDate(cr string, external *string) (bool, string, error) {
+func IsInlinePolicyUpToDate(cr extv1.JSON, external *string) (bool, string, error) {
 	// The AWS API returns Policy Document as an escaped string.
 	// Due to differences in the methods to escape a string, the comparison result between
 	// the spec.Document and policy.Document can sometimes be false negative (due to spaces, line feeds).
 	// Escaping with a common method and then comparing is a safe way.
 
 	// https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_grammar.html
-
-	if cr == "" || external == nil {
-		return false, "", nil
-	}
-
-	return iam.IsPolicyDocumentUpToDate(cr, external)
+	return iam.IsPolicyDocumentUpToDate(string(cr.Raw), external)
 }
